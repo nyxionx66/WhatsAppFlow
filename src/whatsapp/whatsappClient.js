@@ -820,8 +820,8 @@ export class WhatsAppClient {
       this.clearRetryTimeouts();
       
       // Disconnect socket
-      if (this.sock && this.isConnected) {
-        await this.sock.logout();
+      if (this.sock) {
+        this.sock.end(new Error('Graceful shutdown initiated'));
         logger.success('WhatsApp disconnected gracefully');
       }
       
