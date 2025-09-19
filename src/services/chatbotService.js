@@ -30,22 +30,67 @@ export class ChatbotService {
    */
   setupMessageHandler() {
     whatsappClient.onMessage(async (messageInfo) => {
-      await this.handleIncomingMessage(messageInfo);
+      await this.queueMessage(messageInfo);
     });
   }
 
   /**
-   * Handle incoming WhatsApp message with enhanced AI-driven approach
+   * Queues a message for processing and starts the processor if not running.
    */
-  async handleIncomingMessage(messageInfo) {
+  async queueMessage(messageInfo) {
+    const { sender, senderName } = messageInfo;
+
+    if (!this.messageQueue.has(sender)) {
+      this.messageQueue.set(sender, []);
+    }
+    this.messageQueue.get(sender).push(messageInfo);
+    logger.debug(`Message from ${senderName} queued. Queue size: ${this.messageQueue.get(sender).length}`);
+
+    if (!this.processingMessages.has(sender)) {
+      this._processQueue(sender);
+    }
+  }
+
+  /**
+   * Processes the message queue for a given sender.
+   */
+  async _processQueue(sender) {
+    this.processingMessages.add(sender);
+    logger.debug(`Started processing queue for ${sender}`);
+
+    try {
+      while (this.messageQueue.get(sender)?.length > 0) {
+        const messageInfo = this.messageQueue.get(sender).shift();
+        await this._handleSingleMessage(messageInfo);
+      }
+    } catch (error) {
+      logger.error(`Error processing message queue for ${sender}:`, error);
+    } finally {
+      this.processingMessages.delete(sender);
+      this.messageQueue.delete(sender);
+      logger.debug(`Finished processing queue for ${sender}`);
+    }
+  }
+
+
+  /**
+   * Handle a single WhatsApp message with the enhanced AI-driven approach.
+   * This was the original handleIncomingMessage method.
+   */
+  async _handleSingleMessage(messageInfo) {
     const startTime = Date.now();
     const { sender, text, senderName, isGroup, quotedMessage, hasQuote } = messageInfo;
 
     try {
-      // Skip group messages
+      // In groups, only respond if mentioned by name
       if (isGroup) {
-        logger.debug(`Skipping group message from ${senderName}`);
-        return;
+        const botName = config.persona.name.toLowerCase();
+        const messageText = text.toLowerCase();
+
+        if (!messageText.includes(botName)) {
+          logger.debug(`Skipping group message because bot name "${config.persona.name}" was not mentioned.`);
+          return;
+        }
       }
 
       // Check rate limiting
@@ -54,18 +99,10 @@ export class ChatbotService {
         return;
       }
 
-      // Prevent duplicate processing
-      const messageKey = `${sender}-${messageInfo.id}`;
-      if (this.processingMessages.has(messageKey)) {
-        logger.debug(`Duplicate message detected: ${messageKey}`);
-        return;
-      }
-
-      this.processingMessages.add(messageKey);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // The old per-message lock is removed, as the queue system handles this.
 
       const preview = text.length > 50 ? text.substring(0, 50) + '...' : text;
-      logger.info(`Message from ${senderName}: ${preview}`);
+      logger.info(`Processing message from ${senderName}: ${preview}`);
 
       // Update user activity
       this.activeUsers.add(sender);
@@ -128,9 +165,6 @@ export class ChatbotService {
         error: err.message,
         user: senderName
       });
-
-    } finally {
-      this.processingMessages.delete(`${sender}-${messageInfo.id}`);
     }
   }
 
